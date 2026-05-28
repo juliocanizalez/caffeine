@@ -73,7 +73,8 @@ impl AssertionGuard {
         let app_name = CfString::new("caffeine").ok_or("CFStringCreateWithCString failed")?;
 
         let display_id = if prevent_display {
-            let ty = CfString::new("PreventUserIdleDisplaySleep").ok_or("CFStringCreateWithCString failed")?;
+            let ty = CfString::new("PreventUserIdleDisplaySleep")
+                .ok_or("CFStringCreateWithCString failed")?;
             let mut id: IOPMAssertionID = 0;
             let ret = unsafe {
                 IOPMAssertionCreateWithName(
@@ -84,7 +85,9 @@ impl AssertionGuard {
                 )
             };
             if ret != K_IO_RETURN_SUCCESS {
-                return Err(format!("IOPMAssertionCreateWithName(display) error: {ret:#x}"));
+                return Err(format!(
+                    "IOPMAssertionCreateWithName(display) error: {ret:#x}"
+                ));
             }
             Some(id)
         } else {
@@ -108,7 +111,10 @@ impl AssertionGuard {
             return Err(format!("IOPMAssertionCreateWithName(idle) error: {ret:#x}"));
         }
 
-        Ok(Self { display_id, idle_id: Some(idle) })
+        Ok(Self {
+            display_id,
+            idle_id: Some(idle),
+        })
     }
 }
 

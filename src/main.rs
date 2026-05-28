@@ -55,7 +55,11 @@ fn cmd_status() {
                 return;
             }
             let now = ipc::now_secs();
-            let mode = if s.prevent_display { "display + system" } else { "system" };
+            let mode = if s.prevent_display {
+                "display + system"
+            } else {
+                "system"
+            };
             match s.expiry {
                 None => {
                     println!("● Active — indefinite");
@@ -102,7 +106,11 @@ struct State {
 
 impl State {
     fn new(prevent_display: bool) -> Self {
-        Self { guard: None, expiry: None, prevent_display }
+        Self {
+            guard: None,
+            expiry: None,
+            prevent_display,
+        }
     }
 
     fn active(&self) -> bool {
@@ -110,8 +118,10 @@ impl State {
     }
 
     fn remaining(&self) -> Option<Duration> {
-        self.expiry
-            .map(|e| e.checked_duration_since(Instant::now()).unwrap_or(Duration::ZERO))
+        self.expiry.map(|e| {
+            e.checked_duration_since(Instant::now())
+                .unwrap_or(Duration::ZERO)
+        })
     }
 
     fn activate(&mut self, dur: Option<Duration>) {
@@ -153,7 +163,9 @@ impl State {
         match self.expiry {
             None => "Active · indefinite".into(),
             Some(e) => {
-                let rem = e.checked_duration_since(Instant::now()).unwrap_or(Duration::ZERO);
+                let rem = e
+                    .checked_duration_since(Instant::now())
+                    .unwrap_or(Duration::ZERO);
                 format!("Active · {} remaining", duration::fmt(rem))
             }
         }
@@ -172,8 +184,13 @@ fn write_lock(state: &State, pid: u32, started_at: u64) {
         let rem = e.checked_duration_since(Instant::now()).unwrap_or_default();
         now + rem.as_secs()
     });
-    ipc::Status { pid, started_at, expiry: expiry_secs, prevent_display: state.prevent_display }
-        .write();
+    ipc::Status {
+        pid,
+        started_at,
+        expiry: expiry_secs,
+        prevent_display: state.prevent_display,
+    }
+    .write();
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -183,8 +200,14 @@ fn main() {
 
     // Handle non-interactive subcommands before any GUI startup
     match &args.command {
-        Some(Command::Status) => { cmd_status(); return; }
-        Some(Command::Stop) => { cmd_stop(); return; }
+        Some(Command::Status) => {
+            cmd_status();
+            return;
+        }
+        Some(Command::Stop) => {
+            cmd_stop();
+            return;
+        }
         None => {}
     }
 
@@ -247,8 +270,7 @@ fn main() {
     }
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow =
-            ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
+        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
 
         // ── Init: create the tray icon on the first event ─────────────────────
         if tray.is_none() {

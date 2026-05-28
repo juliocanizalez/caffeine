@@ -11,8 +11,7 @@ pub struct Status {
 
 pub fn lock_file_path() -> PathBuf {
     let home = std::env::var("HOME").expect("HOME not set");
-    PathBuf::from(home)
-        .join("Library/Application Support/caffeine/status")
+    PathBuf::from(home).join("Library/Application Support/caffeine/status")
 }
 
 pub fn now_secs() -> u64 {
@@ -48,7 +47,11 @@ impl Status {
         Some(Self {
             pid,
             started_at,
-            expiry: if expiry_raw == 0 { None } else { Some(expiry_raw) },
+            expiry: if expiry_raw == 0 {
+                None
+            } else {
+                Some(expiry_raw)
+            },
             prevent_display,
         })
     }
