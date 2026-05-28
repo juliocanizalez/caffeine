@@ -211,15 +211,12 @@ fn main() {
         None => {}
     }
 
-    let initial_dur: Option<Duration> = args
-        .duration
-        .as_deref()
-        .and_then(|s| {
-            duration::parse(s).unwrap_or_else(|e| {
-                eprintln!("caffeine: invalid duration — {e}");
-                std::process::exit(1);
-            })
-        });
+    let initial_dur: Option<Duration> = args.duration.as_deref().and_then(|s| {
+        duration::parse(s).unwrap_or_else(|e| {
+            eprintln!("caffeine: invalid duration — {e}");
+            std::process::exit(1);
+        })
+    });
 
     // ── Build menu items ──────────────────────────────────────────────────────
 
