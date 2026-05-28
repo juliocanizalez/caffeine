@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/juliocanizalez/caffeine/actions/workflows/ci.yml/badge.svg)](https://github.com/juliocanizalez/caffeine/actions/workflows/ci.yml)
 
-> Another app you almost certainly don't need, rewritten in Rust.
+Another app you almost certainly don't need, rewritten in Rust.
 
 `caffeine` prevents your Mac from going to sleep. It does precisely what `/usr/bin/caffeinate` — the utility that has shipped with macOS since Mountain Lion — already does, except with a persistent menu bar icon, a live countdown, and the quiet dignity of having been compiled to native machine code by a language that required seventeen crates to link against two system frameworks.
 
