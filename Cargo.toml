@@ -1,0 +1,22 @@
+[package]
+name = "caffeine"
+version = "0.1.0"
+edition = "2024"
+description = "Keep your Mac awake — CLI + live menu bar countdown"
+license = "MIT"
+repository = "https://github.com/juliocanizalez/caffeine"
+keywords = ["macos", "sleep", "caffeinate", "menubar"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tray-icon = "0.24"
+tao = "0.34"
+muda = "0.19"
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = "z"
