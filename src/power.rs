@@ -11,7 +11,6 @@ const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 // ── Framework bindings ────────────────────────────────────────────────────────
 
 #[link(name = "IOKit", kind = "framework")]
-#[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn IOPMAssertionCreateWithName(
         assertion_type: *const c_void,
@@ -21,7 +20,10 @@ unsafe extern "C" {
     ) -> IOReturn;
 
     fn IOPMAssertionRelease(assertion_id: IOPMAssertionID) -> IOReturn;
+}
 
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
     fn CFStringCreateWithCString(
         alloc: *const c_void,
         c_str: *const std::ffi::c_char,

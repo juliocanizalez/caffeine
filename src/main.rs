@@ -137,11 +137,11 @@ impl State {
     }
 
     fn tick(&mut self) {
-        if let Some(rem) = self.remaining() {
-            if rem.is_zero() {
-                self.deactivate();
-                ipc::Status::delete();
-            }
+        if let Some(rem) = self.remaining()
+            && rem.is_zero()
+        {
+            self.deactivate();
+            ipc::Status::delete();
         }
     }
 
@@ -214,13 +214,12 @@ fn main() {
     let initial_dur: Option<Duration> = args
         .duration
         .as_deref()
-        .map(|s| {
+        .and_then(|s| {
             duration::parse(s).unwrap_or_else(|e| {
                 eprintln!("caffeine: invalid duration — {e}");
                 std::process::exit(1);
             })
-        })
-        .flatten();
+        });
 
     // ── Build menu items ──────────────────────────────────────────────────────
 
@@ -273,19 +272,18 @@ fn main() {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
 
         // ── Init: create the tray icon on the first event ─────────────────────
-        if tray.is_none() {
-            if let Event::NewEvents(StartCause::Init) = event {
-                if let Some(m) = menu_opt.take() {
-                    tray = Some(
-                        TrayIconBuilder::new()
-                            .with_menu(Box::new(m))
-                            .with_title(state.tray_title())
-                            .with_tooltip("caffeine")
-                            .build()
-                            .expect("failed to create tray icon"),
-                    );
-                }
-            }
+        if tray.is_none()
+            && let Event::NewEvents(StartCause::Init) = event
+            && let Some(m) = menu_opt.take()
+        {
+            tray = Some(
+                TrayIconBuilder::new()
+                    .with_menu(Box::new(m))
+                    .with_title(state.tray_title())
+                    .with_tooltip("caffeine")
+                    .build()
+                    .expect("failed to create tray icon"),
+            );
         }
 
         // ── Tick: check expiry ────────────────────────────────────────────────
