@@ -6,7 +6,7 @@ use tao::{
     event::{Event, StartCause},
     event_loop::{ControlFlow, EventLoopBuilder},
 };
-use tray_icon::{TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 mod duration;
 mod ipc;
@@ -20,7 +20,7 @@ use power::AssertionGuard;
 #[command(
     name = "caffeine",
     version,
-    about = "Keep your Mac awake — spawns a live countdown in the menu bar",
+    about = "Keep your Mac awake — spawns a menu bar icon",
     long_about = None
 )]
 struct Args {
@@ -96,6 +96,74 @@ fn cmd_stop() {
     }
 }
 
+// ── Menu bar icon ─────────────────────────────────────────────────────────────
+
+const ICON_W: u32 = 22;
+const ICON_H: u32 = 22;
+
+// Active: filled coffee cup with steam wisps
+const ICON_ACTIVE: &str = "\
+......................
+....X..X..............
+....X..X..............
+......................
+.XXXXXXXXXX...........
+.XXXXXXXXXXXX.........
+.XXXXXXXXXX.X.........
+.XXXXXXXXXX.X.........
+.XXXXXXXXXXXX.........
+..XXXXXXXXXX..........
+...XXXXXXXXX..........
+....XXXXXXXX..........
+.XXXXXXXXXXX..........
+......................
+......................
+......................
+......................
+......................
+......................
+......................
+......................
+......................";
+
+// Inactive: hollow outline, no steam
+const ICON_INACTIVE: &str = "\
+......................
+......................
+......................
+......................
+.XXXXXXXXXX...........
+.X.......X.XX.........
+.X.......X..X.........
+.X.......X..X.........
+.X.......X.XX.........
+..X......X............
+...X.....X............
+....XXXXXXXX..........
+.XXXXXXXXXXX..........
+......................
+......................
+......................
+......................
+......................
+......................
+......................
+......................
+......................";
+
+fn make_icon(pattern: &str) -> Icon {
+    let mut rgba = vec![0u8; (ICON_W * ICON_H * 4) as usize];
+    for (y, line) in pattern.lines().enumerate() {
+        for (x, ch) in line.chars().enumerate() {
+            if ch == 'X' && x < ICON_W as usize && y < ICON_H as usize {
+                // Black pixel, fully opaque (R=G=B=0, A=255)
+                rgba[(y * ICON_W as usize + x) * 4 + 3] = 255;
+            }
+        }
+    }
+    Icon::from_rgba(rgba, ICON_W, ICON_H).expect("invalid icon")
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 struct State {
@@ -142,17 +210,6 @@ impl State {
         {
             self.deactivate();
             ipc::Status::delete();
-        }
-    }
-
-    fn tray_title(&self) -> String {
-        if !self.active() {
-            return "☕ off".into();
-        }
-        match self.remaining() {
-            None => "☕ ∞".into(),
-            Some(d) if d.is_zero() => "☕ off".into(),
-            Some(d) => format!("☕ {}", duration::fmt(d)),
         }
     }
 
@@ -218,6 +275,34 @@ fn main() {
         })
     });
 
+    // ── Detach from terminal when run interactively ───────────────────────────
+
+    {
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+
+        let in_tty = unsafe { libc::isatty(libc::STDOUT_FILENO) != 0 };
+        let already_daemon = std::env::var("CAFFEINE_DAEMON").is_ok();
+
+        if in_tty && !already_daemon {
+            let exe = std::env::current_exe().expect("cannot resolve executable path");
+            let child = std::process::Command::new(&exe)
+                .args(std::env::args_os().skip(1))
+                .env("CAFFEINE_DAEMON", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .expect("failed to spawn caffeine in background");
+            let pid = child.id();
+            // Parent exits immediately — child is adopted by launchd, no zombie
+            std::mem::forget(child);
+            println!("Caffeine started (PID {})", pid);
+            return;
+        }
+    }
+
     // ── Build menu items ──────────────────────────────────────────────────────
 
     let item_status = MenuItem::new("Active · indefinite", false, None);
@@ -255,6 +340,12 @@ fn main() {
     state.activate(initial_dur);
     write_lock(&state, my_pid, started_at);
 
+    // ── Pre-load both icon variants ───────────────────────────────────────────
+
+    let icon_active = make_icon(ICON_ACTIVE);
+    let icon_inactive = make_icon(ICON_INACTIVE);
+    let mut last_active: Option<bool> = None;
+
     // ── Event loop ────────────────────────────────────────────────────────────
 
     let mut event_loop = EventLoopBuilder::<()>::new().build();
@@ -273,22 +364,38 @@ fn main() {
             && let Event::NewEvents(StartCause::Init) = event
             && let Some(m) = menu_opt.take()
         {
+            let initial_icon = if state.active() {
+                icon_active.clone()
+            } else {
+                icon_inactive.clone()
+            };
             tray = Some(
                 TrayIconBuilder::new()
                     .with_menu(Box::new(m))
-                    .with_title(state.tray_title())
+                    .with_icon(initial_icon)
+                    .with_icon_as_template(true)
                     .with_tooltip("caffeine")
                     .build()
                     .expect("failed to create tray icon"),
             );
+            last_active = Some(state.active());
         }
 
         // ── Tick: check expiry ────────────────────────────────────────────────
         state.tick();
 
-        // ── Sync tray title + menu text ───────────────────────────────────────
-        if let Some(t) = tray.as_ref() {
-            t.set_title(Some(&state.tray_title()));
+        // ── Swap icon on state change + update menu text ──────────────────────
+        let now_active = state.active();
+        if last_active != Some(now_active) {
+            last_active = Some(now_active);
+            let icon = if now_active {
+                icon_active.clone()
+            } else {
+                icon_inactive.clone()
+            };
+            if let Some(t) = tray.as_ref() {
+                let _ = t.set_icon_with_as_template(Some(icon), true);
+            }
         }
         item_status.set_text(state.status_text());
         item_toggle.set_text(if state.active() { "Stop" } else { "Resume" });
