@@ -14,6 +14,7 @@ tray-icon = "0.24"
 tao = "0.34"
 muda = "0.19"
 libc = "0.2"
+png  = "0.18"
 
 [profile.release]
 strip = true
