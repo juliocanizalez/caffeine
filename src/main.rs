@@ -1,18 +1,20 @@
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tao::{
     event::{Event, StartCause},
     event_loop::{ControlFlow, EventLoopBuilder},
 };
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-mod duration;
-mod ipc;
-mod power;
-
-use power::AssertionGuard;
+use caffeine::application::CaffeineService;
+use caffeine::domain::ports::StatusRepository;
+use caffeine::infrastructure::{
+    ipc::{FileStatusRepository, now_secs},
+    jiggle::{CoreGraphicsIdleDetector, CoreGraphicsJiggler},
+    power::IokitPowerManager,
+};
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
@@ -33,6 +35,10 @@ struct Args {
     /// Prevent only system idle sleep, not display sleep (lower power draw)
     #[arg(long)]
     no_display: bool,
+
+    /// Keep Teams/Slack status active by simulating periodic mouse activity
+    #[arg(short = 'k', long)]
+    keep_status_active: bool,
 }
 
 #[derive(Subcommand)]
@@ -45,16 +51,16 @@ enum Command {
 
 // ── Status / stop handlers (exit before the event loop) ──────────────────────
 
-fn cmd_status() {
-    match ipc::Status::read() {
+fn cmd_status(repo: &FileStatusRepository) {
+    match repo.read() {
         None => println!("○ Not running"),
         Some(s) => {
-            if !s.is_alive() {
-                ipc::Status::delete();
+            if !repo.is_alive(s.pid) {
+                repo.delete();
                 println!("○ Not running");
                 return;
             }
-            let now = ipc::now_secs();
+            let now = repo.now_secs();
             let mode = if s.prevent_display {
                 "display + system"
             } else {
@@ -64,12 +70,21 @@ fn cmd_status() {
                 None => {
                     println!("● Active — indefinite");
                     println!("  {} sleep prevented", mode);
+                    if s.jiggle {
+                        println!("  Keep Status Active: enabled");
+                    }
                     println!("  PID {}", s.pid);
                 }
                 Some(expiry) if expiry > now => {
                     let remaining = Duration::from_secs(expiry - now);
-                    println!("● Active — {} remaining", duration::fmt(remaining));
+                    println!(
+                        "● Active — {} remaining",
+                        caffeine::duration::fmt(remaining)
+                    );
                     println!("  {} sleep prevented", mode);
+                    if s.jiggle {
+                        println!("  Keep Status Active: enabled");
+                    }
                     println!("  PID {}", s.pid);
                 }
                 Some(_) => {
@@ -81,12 +96,12 @@ fn cmd_status() {
     }
 }
 
-fn cmd_stop() {
-    match ipc::Status::read() {
+fn cmd_stop(repo: &FileStatusRepository) {
+    match repo.read() {
         None => println!("caffeine is not running"),
         Some(s) => {
-            if !s.is_alive() {
-                ipc::Status::delete();
+            if !repo.is_alive(s.pid) {
+                repo.delete();
                 println!("caffeine is not running");
                 return;
             }
@@ -98,9 +113,6 @@ fn cmd_stop() {
 
 // ── Menu bar icon ─────────────────────────────────────────────────────────────
 
-// Icons: SF Symbols "cup.and.saucer.fill" / "cup.and.saucer" exported at 44×44.
-// Marked as template images so macOS applies the correct colour automatically
-// (dark mode, light mode, coloured wallpapers / vibrancy).
 static ICON_ACTIVE_PNG: &[u8] = include_bytes!("../assets/icon_active.png");
 static ICON_INACTIVE_PNG: &[u8] = include_bytes!("../assets/icon_inactive.png");
 
@@ -132,112 +144,27 @@ fn load_icon(bytes: &[u8]) -> Icon {
     Icon::from_rgba(rgba, info.width, info.height).expect("invalid icon RGBA")
 }
 
-// ── App state ─────────────────────────────────────────────────────────────────
-
-struct State {
-    guard: Option<AssertionGuard>,
-    expiry: Option<Instant>,
-    prevent_display: bool,
-}
-
-impl State {
-    fn new(prevent_display: bool) -> Self {
-        Self {
-            guard: None,
-            expiry: None,
-            prevent_display,
-        }
-    }
-
-    fn active(&self) -> bool {
-        self.guard.is_some()
-    }
-
-    fn remaining(&self) -> Option<Duration> {
-        self.expiry.map(|e| {
-            e.checked_duration_since(Instant::now())
-                .unwrap_or(Duration::ZERO)
-        })
-    }
-
-    fn activate(&mut self, dur: Option<Duration>) {
-        self.guard = AssertionGuard::acquire(self.prevent_display)
-            .map_err(|e| eprintln!("caffeine: {e}"))
-            .ok();
-        self.expiry = dur.map(|d| Instant::now() + d);
-    }
-
-    fn deactivate(&mut self) {
-        self.guard = None;
-        self.expiry = None;
-    }
-
-    fn tick(&mut self) {
-        if let Some(rem) = self.remaining()
-            && rem.is_zero()
-        {
-            self.deactivate();
-            ipc::Status::delete();
-        }
-    }
-
-    fn status_text(&self) -> String {
-        if !self.active() {
-            return "Inactive".into();
-        }
-        match self.expiry {
-            None => "Active · indefinite".into(),
-            Some(e) => {
-                let rem = e
-                    .checked_duration_since(Instant::now())
-                    .unwrap_or(Duration::ZERO);
-                format!("Active · {} remaining", duration::fmt(rem))
-            }
-        }
-    }
-}
-
-// ── Sync lock file with current state ────────────────────────────────────────
-
-fn write_lock(state: &State, pid: u32, started_at: u64) {
-    if !state.active() {
-        ipc::Status::delete();
-        return;
-    }
-    let now = ipc::now_secs();
-    let expiry_secs = state.expiry.map(|e| {
-        let rem = e.checked_duration_since(Instant::now()).unwrap_or_default();
-        now + rem.as_secs()
-    });
-    ipc::Status {
-        pid,
-        started_at,
-        expiry: expiry_secs,
-        prevent_display: state.prevent_display,
-    }
-    .write();
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
     let args = Args::parse();
 
-    // Handle non-interactive subcommands before any GUI startup
+    let repo = FileStatusRepository;
+
     match &args.command {
         Some(Command::Status) => {
-            cmd_status();
+            cmd_status(&repo);
             return;
         }
         Some(Command::Stop) => {
-            cmd_stop();
+            cmd_stop(&repo);
             return;
         }
         None => {}
     }
 
     let initial_dur: Option<Duration> = args.duration.as_deref().and_then(|s| {
-        duration::parse(s).unwrap_or_else(|e| {
+        caffeine::duration::parse(s).unwrap_or_else(|e| {
             eprintln!("caffeine: invalid duration — {e}");
             std::process::exit(1);
         })
@@ -264,7 +191,6 @@ fn main() {
                 .spawn()
                 .expect("failed to spawn caffeine in background");
             let pid = child.id();
-            // Parent exits immediately — child is adopted by launchd, no zombie
             std::mem::forget(child);
             println!("Caffeine started (PID {})", pid);
             return;
@@ -280,6 +206,8 @@ fn main() {
     let item_2h = MenuItem::new("2 hours", true, None);
     let item_4h = MenuItem::new("4 hours", true, None);
     let item_inf = MenuItem::new("Indefinite", true, None);
+    let item_keep_status =
+        CheckMenuItem::new("Keep Status Active", true, args.keep_status_active, None);
     let item_toggle = MenuItem::new("Stop", true, None);
     let item_quit = MenuItem::new("Quit caffeine", true, None);
 
@@ -293,20 +221,27 @@ fn main() {
     menu.append(&item_4h).unwrap();
     menu.append(&item_inf).unwrap();
     menu.append(&PredefinedMenuItem::separator()).unwrap();
+    menu.append(&item_keep_status).unwrap();
+    menu.append(&PredefinedMenuItem::separator()).unwrap();
     menu.append(&item_toggle).unwrap();
     menu.append(&PredefinedMenuItem::separator()).unwrap();
     menu.append(&item_quit).unwrap();
 
-    // ── State + lock file ─────────────────────────────────────────────────────
+    // ── Wire service ──────────────────────────────────────────────────────────
 
-    let my_pid = std::process::id();
-    let started_at = ipc::now_secs();
-
-    let mut menu_opt: Option<Menu> = Some(menu);
-    let mut tray: Option<TrayIcon> = None;
-    let mut state = State::new(!args.no_display);
-    state.activate(initial_dur);
-    write_lock(&state, my_pid, started_at);
+    let started_at = now_secs();
+    let mut service = CaffeineService::new(
+        Box::new(IokitPowerManager),
+        Box::new(CoreGraphicsIdleDetector),
+        Box::new(CoreGraphicsJiggler),
+        Box::new(FileStatusRepository),
+        !args.no_display,
+        args.keep_status_active,
+        std::process::id(),
+        started_at,
+    );
+    service.activate(initial_dur);
+    service.sync_status();
 
     // ── Pre-load both icon variants ───────────────────────────────────────────
 
@@ -315,6 +250,9 @@ fn main() {
     let mut last_active: Option<bool> = None;
 
     // ── Event loop ────────────────────────────────────────────────────────────
+
+    let mut menu_opt: Option<Menu> = Some(menu);
+    let mut tray: Option<TrayIcon> = None;
 
     let mut event_loop = EventLoopBuilder::<()>::new().build();
 
@@ -327,12 +265,11 @@ fn main() {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
 
-        // ── Init: create the tray icon on the first event ─────────────────────
         if tray.is_none()
             && let Event::NewEvents(StartCause::Init) = event
             && let Some(m) = menu_opt.take()
         {
-            let initial_icon = if state.active() {
+            let initial_icon = if service.is_active() {
                 icon_active.clone()
             } else {
                 icon_inactive.clone()
@@ -346,14 +283,13 @@ fn main() {
                     .build()
                     .expect("failed to create tray icon"),
             );
-            last_active = Some(state.active());
+            last_active = Some(service.is_active());
         }
 
-        // ── Tick: check expiry ────────────────────────────────────────────────
-        state.tick();
+        service.tick();
+        service.maybe_jiggle();
 
-        // ── Swap icon on state change + update menu text ──────────────────────
-        let now_active = state.active();
+        let now_active = service.is_active();
         if last_active != Some(now_active) {
             last_active = Some(now_active);
             let icon = if now_active {
@@ -365,29 +301,38 @@ fn main() {
                 let _ = t.set_icon_with_as_template(Some(icon), true);
             }
         }
-        item_status.set_text(state.status_text());
-        item_toggle.set_text(if state.active() { "Stop" } else { "Resume" });
+        item_status.set_text(service.status_text());
+        item_toggle.set_text(if service.is_active() {
+            "Stop"
+        } else {
+            "Resume"
+        });
 
-        // ── Handle menu clicks ────────────────────────────────────────────────
         while let Ok(ev) = MenuEvent::receiver().try_recv() {
             let id = &ev.id;
 
             if id == item_quit.id() {
-                state.deactivate();
-                ipc::Status::delete();
+                service.shutdown();
                 *control_flow = ControlFlow::Exit;
                 return;
             }
 
             if id == item_toggle.id() {
-                if state.active() {
-                    state.deactivate();
-                    ipc::Status::delete();
+                if service.is_active() {
+                    service.deactivate();
+                    service.sync_status();
                 } else {
-                    state.activate(None);
-                    write_lock(&state, my_pid, started_at);
+                    service.activate(None);
+                    service.sync_status();
                 }
                 return;
+            }
+
+            if id == item_keep_status.id() {
+                service.set_jiggle_enabled(!service.jiggle_enabled);
+                item_keep_status.set_checked(service.jiggle_enabled);
+                service.sync_status();
+                continue;
             }
 
             let preset = if id == item_15m.id() {
@@ -406,8 +351,8 @@ fn main() {
                 continue;
             };
 
-            state.activate(preset);
-            write_lock(&state, my_pid, started_at);
+            service.activate(preset);
+            service.sync_status();
         }
     });
 }

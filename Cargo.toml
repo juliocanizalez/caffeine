@@ -1,12 +1,20 @@
 [package]
 name = "caffeine"
-version = "0.1.1"
+version = "0.2.1"
 edition = "2024"
 description = "Keep your Mac awake — CLI + live menu bar countdown"
 license = "MIT"
 repository = "https://github.com/juliocanizalez/caffeine"
 keywords = ["macos", "sleep", "caffeinate", "menubar"]
 categories = ["command-line-utilities"]
+
+[lib]
+name = "caffeine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "caffeine"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
