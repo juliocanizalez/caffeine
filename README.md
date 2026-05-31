@@ -38,6 +38,8 @@ caffeine 2h           # 2 hours
 caffeine 1h30m        # 1 hour 30 minutes
 caffeine 90s          # 90 seconds, for the truly impatient
 caffeine --no-display # keeps the system awake but lets the screen dim
+caffeine -k           # also keeps Teams/Slack status active (see below)
+caffeine -k 2h        # keep status active for 2 hours
 ```
 
 When run from a terminal, caffeine detaches automatically and prints the PID:
@@ -53,21 +55,7 @@ caffeine status       # ● Active — 1h 23m remaining
 caffeine stop         # gracefully terminates the running instance
 ```
 
-The menu bar icon is a minimal coffee cup that adapts to dark mode and wallpaper colour — filled when active, hollow when inactive. Click it for presets (15m / 30m / 1h / 2h / 4h / Indefinite), a Stop/Resume toggle, and a Quit option for when you've come to your senses.
-
----
-
-## Upgrading
-
-```bash
-brew upgrade juliocanizalez/tap/caffeine
-```
-
-If caffeine is already running, stop it first:
-
-```bash
-caffeine stop && brew upgrade juliocanizalez/tap/caffeine
-```
+The menu bar icon is a minimal coffee cup that adapts to dark mode and wallpaper colour — filled when active, hollow when inactive. Click it for presets (15m / 30m / 1h / 2h / 4h / Indefinite), a **Keep Status Active** toggle, a Stop/Resume toggle, and a Quit option for when you've come to your senses.
 
 ---
 
@@ -77,31 +65,6 @@ caffeine stop && brew upgrade juliocanizalez/tap/caffeine
 caffeine stop
 brew uninstall juliocanizalez/tap/caffeine
 ```
-
----
-
-## Releases & checksums
-
-Each tagged release (`v*`) builds pre-compiled binaries for `aarch64-apple-darwin` and `x86_64-apple-darwin` via GitHub Actions. A `.sha256` sidecar file is uploaded alongside each tarball.
-
-### Verifying a download
-
-```bash
-curl -LO https://github.com/juliocanizalez/caffeine/releases/download/v0.1.1/caffeine-aarch64-apple-darwin.tar.gz
-curl -LO https://github.com/juliocanizalez/caffeine/releases/download/v0.1.1/caffeine-aarch64-apple-darwin.tar.gz.sha256
-shasum -a 256 -c caffeine-aarch64-apple-darwin.tar.gz.sha256
-```
-
-### Bumping a release (maintainers)
-
-1. Tag and push: `git tag v0.x.y && git push origin v0.x.y`
-2. CI builds both targets and uploads tarballs + `.sha256` sidecars automatically.
-3. Copy the new checksums from the release page (or the `.sha256` files).
-4. Update `Formula/caffeine.rb`:
-   - `version "0.x.y"`
-   - `sha256` under `on_arm` — paste the `aarch64` checksum
-   - `sha256` under `on_intel` — paste the `x86_64` checksum
-5. Commit: `git commit Formula/caffeine.rb -m "build(release): bump formula to v0.x.y"`
 
 ---
 
@@ -115,6 +78,30 @@ Two IOKit power assertions are acquired at startup via direct FFI against Apple'
 Both are released the moment the process exits, regardless of how — `SIGTERM`, `SIGKILL`, a well-aimed `killall`, or the heat death of your MacBook's battery. This is an OS-level guarantee: IOKit ties assertion lifetimes to process lifetimes. The RAII `Drop` implementation in the code is purely ceremonial at this point, included as a matter of professional pride.
 
 A note on `"NoDisplaySleep"`: you'll find this string in various forum posts suggesting it's the correct assertion for display sleep prevention. It isn't — not for user-space processes. It requires a special entitlement that Apple reserves for daemons. Attempting to use it returns `kIOReturnNotPrivileged (0xe00002c2)`, which is the OS's polite way of saying no. `"PreventUserIdleDisplaySleep"` is the correct public API, and it's exactly what Activity Monitor reports when apps are preventing display sleep.
+
+### Keep Status Active (`-k`)
+
+IOKit sleep assertions prevent the system from sleeping, but Teams, Slack, and similar apps determine "online" status by reading the **HID idle timer** — the seconds since the last real mouse or keyboard event — completely independently of sleep prevention.
+
+When `-k` is active (or toggled on from the menu bar), caffeine periodically posts a tiny synthetic mouse event via `CGEventCreateMouseEvent` + `CGEventPost`, moving the cursor 1 px right and immediately back. This resets the HID idle timer and fools presence-detection into thinking the user is at their desk.
+
+**Smart pause**: caffeine first checks `CGEventSourceSecondsSinceLastEventType`. If the user has been genuinely active within the last **5 minutes**, the jiggle is skipped — no unnecessary cursor movement while you're typing. Once real inactivity exceeds 5 minutes, a jiggle fires every **60 seconds** until activity resumes or caffeine is stopped.
+
+---
+
+## Performance
+
+Measured on Apple M-series (arm64, debug build, `cargo test -- --nocapture`):
+
+| Operation | Avg latency |
+|-----------|------------|
+| `idle_seconds()` — `CGEventSourceSecondsSinceLastEventType` | ~30 ns |
+| `jiggle()` — two `CGEventPost` calls + cursor restore | ~9 µs |
+| RSS growth over 500 jiggle calls | < 500 KB |
+
+The 500 ms event-loop tick means jiggle overhead is immeasurable in practice — the check runs once per tick, does a single CGEventSource query (~30 ns), and only posts events after 5 minutes of verified idleness.
+
+Run `cargo test -- --nocapture` to reproduce these numbers on your machine.
 
 ---
 
