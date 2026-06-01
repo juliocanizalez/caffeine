@@ -1,7 +1,6 @@
 /// Snapshot of a running session — persisted to and read from the IPC file.
 pub struct SessionInfo {
     pub pid: u32,
-    pub started_at: u64,
     pub expiry: Option<u64>,
     pub prevent_display: bool,
     pub jiggle: bool,

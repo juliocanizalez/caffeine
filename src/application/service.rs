@@ -18,7 +18,6 @@ pub struct CaffeineService {
     last_jiggle: Option<Instant>,
 
     pid: u32,
-    started_at: u64,
 }
 
 impl CaffeineService {
@@ -31,7 +30,6 @@ impl CaffeineService {
         prevent_display: bool,
         jiggle_enabled: bool,
         pid: u32,
-        started_at: u64,
     ) -> Self {
         Self {
             power,
@@ -45,7 +43,6 @@ impl CaffeineService {
             jiggle_config: JiggleConfig::default(),
             last_jiggle: None,
             pid,
-            started_at,
         }
     }
 
@@ -136,7 +133,6 @@ impl CaffeineService {
         });
         self.repo.write(&SessionInfo {
             pid: self.pid,
-            started_at: self.started_at,
             expiry,
             prevent_display: self.prevent_display,
             jiggle: self.jiggle_enabled,

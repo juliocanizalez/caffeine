@@ -26,9 +26,8 @@ impl StatusRepository for FileStatusRepository {
             let _ = fs::create_dir_all(parent);
         }
         let content = format!(
-            "{}\n{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n",
             info.pid,
-            info.started_at,
             info.expiry.unwrap_or(0),
             info.prevent_display,
             info.jiggle,
@@ -40,13 +39,11 @@ impl StatusRepository for FileStatusRepository {
         let content = fs::read_to_string(lock_file_path()).ok()?;
         let mut lines = content.lines();
         let pid: u32 = lines.next()?.parse().ok()?;
-        let started_at: u64 = lines.next()?.parse().ok()?;
         let expiry_raw: u64 = lines.next()?.parse().ok()?;
         let prevent_display: bool = lines.next()?.parse().ok()?;
         let jiggle: bool = lines.next().and_then(|l| l.parse().ok()).unwrap_or(false);
         Some(SessionInfo {
             pid,
-            started_at,
             expiry: if expiry_raw == 0 {
                 None
             } else {
