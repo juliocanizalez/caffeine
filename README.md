@@ -9,15 +9,15 @@
 
 Your Mac falls asleep. Your status goes red. Your boss notices. You were just reading a long document, but now you look like you vanished. We've all been there.
 
-`caffeine` keeps your Mac awake, your screen on, and your presence indicator green so the surveillance software your company calls a "collaboration tool" thinks you're absolutely crushing it. It also puts a ☕ icon in your menu bar, which `/usr/bin/caffeinate` does not, and which is arguably the whole point.
+`caffeine` keeps your Mac awake, your screen on, and your presence indicator green so the surveillance software your company calls a "collaboration tool" thinks you're absolutely crushing it. It also puts a coffee icon in your menu bar, which `/usr/bin/caffeinate` does not, and which is arguably the whole point.
 
-Written in Rust because of course it is. Seventeen crates. Two system frameworks. One coffee emoji. Totally worth it.
+Written in Rust because of course it is.
 
 ---
 
 ## Installation
 
-**Via Homebrew (recommended once you've accepted this decision):**
+**Via Homebrew (recommended):**
 
 ```bash
 brew tap juliocanizalez/tap
@@ -26,7 +26,7 @@ brew install juliocanizalez/tap/caffeine --formula
 
 > `--formula` is required because an unrelated GUI app called Caffeine exists in homebrew-cask. Without it, Homebrew will install that instead and leave you confused.
 
-**Via Cargo (for the kind of person who already has Cargo):**
+**Via Cargo:**
 
 ```bash
 cargo install --git https://github.com/juliocanizalez/caffeine
@@ -41,8 +41,8 @@ caffeine              # starts in background, menu bar shows active icon
 caffeine 30           # 30 minutes (plain number means minutes)
 caffeine 2h           # 2 hours
 caffeine 1h30m        # 1 hour 30 minutes
-caffeine 90s          # 90 seconds, for the truly impatient
-caffeine 2h15m30s     # yes, this works too, if you're that kind of person
+caffeine 90s          # 90 seconds
+caffeine 2h15m30s     # combined duration
 caffeine --no-display # keeps the system awake but lets the screen dim
 caffeine -k           # also keeps Teams/Slack status active (see below)
 caffeine -k 2h        # keep status active for 2 hours
@@ -57,54 +57,107 @@ Caffeine started (PID 12345)
 From another terminal, while caffeine is running:
 
 ```bash
-caffeine status       # ● Active  1h 23m remaining
-caffeine stop         # gracefully terminates the running instance
+caffeine status            # prints human-readable status
+caffeine status --json     # outputs status as JSON for scripting
+caffeine stop              # gracefully terminates the running instance
 ```
 
-The `status` output also tells you which sleep mode is active and whether Keep Status Active is on. Stale PID files from unclean exits are detected and cleaned up automatically, so you don't have to think about them.
+The `status` output tells you which sleep mode is active, time remaining, and whether Keep Status Active is on. Stale PID files from unclean exits are detected and cleaned up automatically.
 
-The menu bar icon is a minimal coffee cup rendered from SVG (filled when active, hollow when inactive) and it adapts to dark mode and wallpaper colour as a proper template image. Click it for quick presets (15m / 30m / 1h / 2h / 4h / Indefinite), a **Keep Status Active** toggle, a Stop / Resume toggle, and a Quit option for when you've come to your senses.
+### Shell completions
+
+Generate a completion script for your shell and source it:
+
+```bash
+# zsh
+caffeine completions zsh >> ~/.zshrc
+
+# fish
+caffeine completions fish > ~/.config/fish/completions/caffeine.fish
+
+# bash
+caffeine completions bash >> ~/.bashrc
+```
+
+Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
+
+### Menu bar
+
+The menu bar icon is a minimal coffee cup (filled when active, hollow when inactive) that adapts to dark mode as a template image. Click it to access:
+
+- **Status line** showing time remaining (updates every 500ms)
+- **Duration presets**: 15m / 30m / 1h / 2h / 4h / Indefinite
+- **Keep Status Active** toggle (jiggle mode)
+- **Launch at Login** toggle
+- **Update available** banner when a newer release is detected
+- **Stop / Resume** toggle
+- **Quit**
 
 ---
 
-## Uninstalling
+## Configuration
 
-```bash
-caffeine stop
-brew uninstall juliocanizalez/tap/caffeine
+caffeine reads `~/.config/caffeine/config.toml` on startup. All fields are optional and CLI flags override config values.
+
+```toml
+# ~/.config/caffeine/config.toml
+
+# Prevent display sleep in addition to system sleep (default: true)
+prevent_display = true
+
+# Enable jiggle mode by default (default: false)
+keep_status_active = false
+
+# Auto-deactivate when battery drops below this percentage (0 = disabled)
+battery_threshold = 20
+
+# Check GitHub for newer releases on startup (default: true)
+check_for_updates = true
 ```
+
+---
+
+## Keep Status Active (`-k`)
+
+IOKit sleep assertions prevent the system from sleeping, but Teams, Slack, and similar apps determine your "online" status by reading the HID idle timer independently of sleep prevention.
+
+When `-k` is active (or toggled on from the menu bar), caffeine periodically posts a tiny synthetic mouse event via `CGEventCreateMouseEvent` + `CGEventPost`, moving the cursor 1px right and immediately back. This resets the HID idle timer and keeps presence detection from marking you away.
+
+**Smart pause:** caffeine first checks `CGEventSourceSecondsSinceLastEventType`. If you have been genuinely active within the last 5 minutes, the jiggle is skipped. Once real inactivity exceeds 5 minutes, a jiggle fires every 60 seconds until activity resumes or caffeine is stopped.
+
+---
+
+## Battery guard
+
+When `battery_threshold` is set in the config, caffeine checks the battery level every 30 seconds via `IOPSCopyPowerSourcesInfo`. If the level drops below the threshold, caffeine deactivates automatically and prints a message to stderr. Set to `0` (the default) to disable this behaviour entirely.
+
+---
+
+## Launch at Login
+
+The **Launch at Login** toggle in the menu installs or removes a launchd plist at `~/Library/LaunchAgents/com.juliocanizalez.caffeine.plist`. The plist uses `RunAtLoad: false`, so caffeine starts on your next login rather than immediately. Removing the toggle unloads the agent and deletes the plist.
 
 ---
 
 ## How it works
 
-Two IOKit power assertions are acquired at startup via direct FFI against Apple's `IOKit.framework`:
+Two IOKit power assertions are acquired at startup via direct FFI against `IOKit.framework`:
 
-`PreventUserIdleDisplaySleep` keeps the screen on. `NoIdleSleepAssertion` prevents the system from idle sleeping. Both are released the moment the process exits, regardless of how: `SIGTERM`, `SIGKILL`, a well-aimed `killall`, or the heat death of your MacBook's battery. This is an OS-level guarantee: IOKit ties assertion lifetimes to process lifetimes. The RAII `Drop` implementation in the code is purely ceremonial at this point, included as a matter of professional pride.
+`PreventUserIdleDisplaySleep` keeps the screen on. `NoIdleSleepAssertion` prevents the system from idle sleeping. Both are released the moment the process exits, regardless of how it exits. This is an OS-level guarantee: IOKit ties assertion lifetimes to process lifetimes.
 
-A note on `"NoDisplaySleep"`: you'll find this string in various forum posts suggesting it's the correct assertion for display sleep prevention. It isn't, not for user-space processes. It requires a special entitlement that Apple reserves for daemons. Attempting to use it returns `kIOReturnNotPrivileged (0xe00002c2)`, which is the OS's polite way of saying no. `"PreventUserIdleDisplaySleep"` is the correct public API, and it's exactly what Activity Monitor reports when apps are preventing display sleep.
-
-### Keep Status Active (`-k`)
-
-IOKit sleep assertions prevent the system from sleeping, but Teams, Slack, and similar apps determine your "online" status by reading the HID idle timer (seconds since the last real mouse or keyboard event), completely independently of sleep prevention.
-
-When `-k` is active (or toggled on from the menu bar), caffeine periodically posts a tiny synthetic mouse event via `CGEventCreateMouseEvent` + `CGEventPost`, moving the cursor 1 px right and immediately back. This resets the HID idle timer and fools presence detection into thinking you're at your desk.
-
-**Smart pause:** caffeine first checks `CGEventSourceSecondsSinceLastEventType`. If you've been genuinely active within the last 5 minutes, the jiggle is skipped. No unnecessary cursor movement while you're typing. Once real inactivity exceeds 5 minutes, a jiggle fires every 60 seconds until activity resumes or caffeine is stopped.
+A note on `"NoDisplaySleep"`: you'll find this string in forum posts suggesting it's the correct assertion for display sleep prevention. It isn't, not for user-space processes. It requires a special entitlement that Apple reserves for daemons. Attempting to use it returns `kIOReturnNotPrivileged (0xe00002c2)`. `"PreventUserIdleDisplaySleep"` is the correct public API, and it's exactly what Activity Monitor reports when apps are preventing display sleep.
 
 ---
 
 ## Performance
 
-Measured on Apple M-series (arm64, debug build, `cargo test -- --nocapture`):
+Measured on Apple M-series (arm64, debug build):
 
 | Operation | Avg latency |
 |---|---|
 | `idle_seconds()` via `CGEventSourceSecondsSinceLastEventType` | ~30 ns |
-| `jiggle()` via two `CGEventPost` calls + cursor restore | ~9 µs |
+| `jiggle()` via two `CGEventPost` calls + cursor restore | ~9 us |
 | RSS growth over 500 jiggle calls | < 500 KB |
-
-The 500 ms event-loop tick means jiggle overhead is immeasurable in practice. The check runs once per tick, does a single CGEventSource query (~30 ns), and only posts events after 5 minutes of verified idleness.
 
 Run `cargo test -- --nocapture` to reproduce these numbers on your machine.
 
@@ -118,13 +171,16 @@ When running, `caffeine` writes its state to:
 ~/Library/Application Support/caffeine/status
 ```
 
-This is what `caffeine status` reads. The file contains five fields: PID, start time, expiry timestamp (or 0 for indefinite), display sleep prevention flag, and jiggle flag. If the process is killed without a clean exit, the file may persist. Subsequent calls to `status` or `stop` detect the stale PID and clean it up automatically.
+This is what `caffeine status` reads. The file contains the PID, expiry timestamp (or 0 for indefinite), display sleep prevention flag, and jiggle flag. If the process is killed without a clean exit, the file may persist. Subsequent calls to `status` or `stop` detect the stale PID and clean it up automatically.
 
 ---
 
-## What's missing (intentionally)
+## Uninstalling
 
-`--pid` mode (`caffeinate -w`), AC-only mode, low-battery cutoff, and autostart on login are all reasonable additions. Feel free to open a PR, or simply install Amphetamine from the App Store and spare yourself the whole exercise.
+```bash
+caffeine stop
+brew uninstall juliocanizalez/tap/caffeine
+```
 
 ---
 
