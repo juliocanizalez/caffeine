@@ -1,6 +1,9 @@
+use std::io::stdout;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tao::{
     event::{Event, StartCause},
@@ -9,11 +12,15 @@ use tao::{
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use caffeine::application::CaffeineService;
-use caffeine::domain::ports::StatusRepository;
+use caffeine::domain::ports::{ConfigRepository, LoginItemManager, StatusRepository};
 use caffeine::infrastructure::{
+    battery::IokitBatteryMonitor,
+    config::FileConfigRepository,
     ipc::FileStatusRepository,
     jiggle::{CoreGraphicsIdleDetector, CoreGraphicsJiggler},
+    login_item::LaunchdLoginItemManager,
     power::IokitPowerManager,
+    update_checker,
 };
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -44,23 +51,57 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     /// Print the status of the running caffeine instance
-    Status,
+    Status {
+        /// Output status as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop the running caffeine instance
     Stop,
+    /// Generate shell completion script
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
+    },
 }
 
 // ── Status / stop handlers (exit before the event loop) ──────────────────────
 
-fn cmd_status(repo: &FileStatusRepository) {
+fn cmd_status(repo: &FileStatusRepository, json: bool) {
     match repo.read() {
-        None => println!("○ Not running"),
+        None => {
+            if json {
+                println!("{{\"running\":false}}");
+            } else {
+                println!("○ Not running");
+            }
+        }
         Some(s) => {
             if !repo.is_alive(s.pid) {
                 repo.delete();
-                println!("○ Not running");
+                if json {
+                    println!("{{\"running\":false}}");
+                } else {
+                    println!("○ Not running");
+                }
                 return;
             }
             let now = repo.now_secs();
+
+            if json {
+                let remaining_secs = s.expiry.and_then(|exp| exp.checked_sub(now));
+                let obj = serde_json::json!({
+                    "running": true,
+                    "pid": s.pid,
+                    "expiry_unix": s.expiry,
+                    "remaining_secs": remaining_secs,
+                    "prevent_display": s.prevent_display,
+                    "jiggle": s.jiggle,
+                });
+                println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+                return;
+            }
+
             let mode = if s.prevent_display {
                 "display + system"
             } else {
@@ -126,6 +167,49 @@ fn load_icon(bytes: &[u8]) -> Icon {
     Icon::from_rgba(pixmap.data().to_vec(), w, h).expect("invalid icon RGBA")
 }
 
+struct MenuItems {
+    status: MenuItem,
+    update: MenuItem,
+    m15m: MenuItem,
+    m30m: MenuItem,
+    m1h: MenuItem,
+    m2h: MenuItem,
+    m4h: MenuItem,
+    inf: MenuItem,
+    keep_status: CheckMenuItem,
+    launch_at_login: CheckMenuItem,
+    toggle: MenuItem,
+    quit: MenuItem,
+}
+
+impl MenuItems {
+    /// Build (or rebuild) the tray menu. Prepends the update banner when `show_update` is true.
+    fn build(&self, show_update: bool) -> Menu {
+        let menu = Menu::new();
+        if show_update {
+            menu.append(&self.update).unwrap();
+            menu.append(&PredefinedMenuItem::separator()).unwrap();
+        }
+        menu.append(&self.status).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
+        menu.append(&self.m15m).unwrap();
+        menu.append(&self.m30m).unwrap();
+        menu.append(&self.m1h).unwrap();
+        menu.append(&self.m2h).unwrap();
+        menu.append(&self.m4h).unwrap();
+        menu.append(&self.inf).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
+        menu.append(&self.keep_status).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
+        menu.append(&self.launch_at_login).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
+        menu.append(&self.toggle).unwrap();
+        menu.append(&PredefinedMenuItem::separator()).unwrap();
+        menu.append(&self.quit).unwrap();
+        menu
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
@@ -133,13 +217,20 @@ fn main() {
 
     let repo = FileStatusRepository;
 
+    // Load config; CLI flags override config values.
+    let cfg = FileConfigRepository.load();
+
     match &args.command {
-        Some(Command::Status) => {
-            cmd_status(&repo);
+        Some(Command::Status { json }) => {
+            cmd_status(&repo, *json);
             return;
         }
         Some(Command::Stop) => {
             cmd_stop(&repo);
+            return;
+        }
+        Some(Command::Completions { shell }) => {
+            clap_complete::generate(*shell, &mut Args::command(), "caffeine", &mut stdout());
             return;
         }
         None => {}
@@ -151,6 +242,14 @@ fn main() {
             std::process::exit(1);
         })
     });
+
+    // Merge config + CLI flags (CLI wins).
+    let prevent_display = if args.no_display {
+        false
+    } else {
+        cfg.prevent_display
+    };
+    let jiggle_enabled = args.keep_status_active || cfg.keep_status_active;
 
     // ── Detach from terminal when run interactively ───────────────────────────
 
@@ -179,35 +278,41 @@ fn main() {
         }
     }
 
+    // ── Spawn update checker in background ───────────────────────────────────
+
+    let update_result: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    if cfg.check_for_updates {
+        let result_ref = Arc::clone(&update_result);
+        std::thread::spawn(move || {
+            if let Some(tag) = update_checker::check_for_update()
+                && let Ok(mut guard) = result_ref.lock()
+            {
+                *guard = Some(tag);
+            }
+        });
+    }
+
+    // ── Login item manager ────────────────────────────────────────────────────
+
+    let login_mgr = LaunchdLoginItemManager;
+
     // ── Build menu items ──────────────────────────────────────────────────────
 
-    let item_status = MenuItem::new("Active · indefinite", false, None);
-    let item_15m = MenuItem::new("15 minutes", true, None);
-    let item_30m = MenuItem::new("30 minutes", true, None);
-    let item_1h = MenuItem::new("1 hour", true, None);
-    let item_2h = MenuItem::new("2 hours", true, None);
-    let item_4h = MenuItem::new("4 hours", true, None);
-    let item_inf = MenuItem::new("Indefinite", true, None);
-    let item_keep_status =
-        CheckMenuItem::new("Keep Status Active", true, args.keep_status_active, None);
-    let item_toggle = MenuItem::new("Stop", true, None);
-    let item_quit = MenuItem::new("Quit caffeine", true, None);
-
-    let menu = Menu::new();
-    menu.append(&item_status).unwrap();
-    menu.append(&PredefinedMenuItem::separator()).unwrap();
-    menu.append(&item_15m).unwrap();
-    menu.append(&item_30m).unwrap();
-    menu.append(&item_1h).unwrap();
-    menu.append(&item_2h).unwrap();
-    menu.append(&item_4h).unwrap();
-    menu.append(&item_inf).unwrap();
-    menu.append(&PredefinedMenuItem::separator()).unwrap();
-    menu.append(&item_keep_status).unwrap();
-    menu.append(&PredefinedMenuItem::separator()).unwrap();
-    menu.append(&item_toggle).unwrap();
-    menu.append(&PredefinedMenuItem::separator()).unwrap();
-    menu.append(&item_quit).unwrap();
+    let items = MenuItems {
+        status: MenuItem::new("Active · indefinite", false, None),
+        update: MenuItem::new("", true, None), // text set when update found
+        m15m: MenuItem::new("15 minutes", true, None),
+        m30m: MenuItem::new("30 minutes", true, None),
+        m1h: MenuItem::new("1 hour", true, None),
+        m2h: MenuItem::new("2 hours", true, None),
+        m4h: MenuItem::new("4 hours", true, None),
+        inf: MenuItem::new("Indefinite", true, None),
+        keep_status: CheckMenuItem::new("Keep Status Active", true, jiggle_enabled, None),
+        launch_at_login: CheckMenuItem::new("Launch at Login", true, login_mgr.is_enabled(), None),
+        toggle: MenuItem::new("Stop", true, None),
+        quit: MenuItem::new("Quit caffeine", true, None),
+    };
+    let menu = items.build(false);
 
     // ── Wire service ──────────────────────────────────────────────────────────
 
@@ -216,8 +321,10 @@ fn main() {
         Box::new(CoreGraphicsIdleDetector),
         Box::new(CoreGraphicsJiggler),
         Box::new(FileStatusRepository),
-        !args.no_display,
-        args.keep_status_active,
+        Box::new(IokitBatteryMonitor),
+        prevent_display,
+        jiggle_enabled,
+        cfg.battery_threshold,
         std::process::id(),
     );
     service.activate(initial_dur);
@@ -233,6 +340,7 @@ fn main() {
 
     let mut menu_opt: Option<Menu> = Some(menu);
     let mut tray: Option<TrayIcon> = None;
+    let mut update_shown = false;
 
     let mut event_loop = EventLoopBuilder::<()>::new().build();
 
@@ -266,6 +374,18 @@ fn main() {
             last_active = Some(service.is_active());
         }
 
+        // Show update banner the first time the check completes.
+        if !update_shown
+            && let Ok(guard) = update_result.try_lock()
+            && let Some(ref tag) = *guard
+        {
+            items.update.set_text(format!("⬆ Update available: {tag}"));
+            update_shown = true;
+            if let Some(t) = tray.as_ref() {
+                t.set_menu(Some(Box::new(items.build(true))));
+            }
+        }
+
         service.tick();
         service.maybe_jiggle();
 
@@ -281,8 +401,8 @@ fn main() {
                 let _ = t.set_icon_with_as_template(Some(icon), true);
             }
         }
-        item_status.set_text(service.status_text());
-        item_toggle.set_text(if service.is_active() {
+        items.status.set_text(service.status_text());
+        items.toggle.set_text(if service.is_active() {
             "Stop"
         } else {
             "Resume"
@@ -291,13 +411,18 @@ fn main() {
         while let Ok(ev) = MenuEvent::receiver().try_recv() {
             let id = &ev.id;
 
-            if id == item_quit.id() {
+            if id == items.quit.id() {
                 service.shutdown();
                 *control_flow = ControlFlow::Exit;
                 return;
             }
 
-            if id == item_toggle.id() {
+            if id == items.update.id() {
+                let _ = open::that("https://github.com/juliocanizalez/caffeine/releases");
+                continue;
+            }
+
+            if id == items.toggle.id() {
                 if service.is_active() {
                     service.deactivate();
                     service.sync_status();
@@ -305,27 +430,40 @@ fn main() {
                     service.activate(None);
                     service.sync_status();
                 }
-                return;
+                continue;
             }
 
-            if id == item_keep_status.id() {
+            if id == items.keep_status.id() {
                 service.set_jiggle_enabled(!service.jiggle_enabled);
-                item_keep_status.set_checked(service.jiggle_enabled);
+                items.keep_status.set_checked(service.jiggle_enabled);
                 service.sync_status();
                 continue;
             }
 
-            let preset = if id == item_15m.id() {
+            if id == items.launch_at_login.id() {
+                let currently_enabled = login_mgr.is_enabled();
+                if currently_enabled {
+                    if let Err(e) = login_mgr.disable() {
+                        eprintln!("caffeine: failed to disable login item — {e}");
+                    }
+                } else if let Err(e) = login_mgr.enable() {
+                    eprintln!("caffeine: failed to enable login item — {e}");
+                }
+                items.launch_at_login.set_checked(login_mgr.is_enabled());
+                continue;
+            }
+
+            let preset = if id == items.m15m.id() {
                 Some(Duration::from_secs(15 * 60))
-            } else if id == item_30m.id() {
+            } else if id == items.m30m.id() {
                 Some(Duration::from_secs(30 * 60))
-            } else if id == item_1h.id() {
+            } else if id == items.m1h.id() {
                 Some(Duration::from_secs(3600))
-            } else if id == item_2h.id() {
+            } else if id == items.m2h.id() {
                 Some(Duration::from_secs(2 * 3600))
-            } else if id == item_4h.id() {
+            } else if id == items.m4h.id() {
                 Some(Duration::from_secs(4 * 3600))
-            } else if id == item_inf.id() {
+            } else if id == items.inf.id() {
                 None
             } else {
                 continue;
