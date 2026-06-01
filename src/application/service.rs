@@ -1,7 +1,9 @@
 use std::time::{Duration, Instant};
 
 use crate::domain::models::{JiggleConfig, SessionInfo};
-use crate::domain::ports::{IdleDetector, Jiggler, PowerGuard, PowerManager, StatusRepository};
+use crate::domain::ports::{
+    BatteryMonitor, IdleDetector, Jiggler, PowerGuard, PowerManager, StatusRepository,
+};
 use crate::duration;
 
 pub struct CaffeineService {
@@ -9,6 +11,7 @@ pub struct CaffeineService {
     idle: Box<dyn IdleDetector>,
     jiggler: Box<dyn Jiggler>,
     repo: Box<dyn StatusRepository>,
+    battery: Box<dyn BatteryMonitor>,
 
     guard: Option<Box<dyn PowerGuard>>,
     expiry: Option<Instant>,
@@ -16,6 +19,8 @@ pub struct CaffeineService {
     pub jiggle_enabled: bool,
     jiggle_config: JiggleConfig,
     last_jiggle: Option<Instant>,
+    battery_threshold: u8,
+    tick_count: u32,
 
     pid: u32,
 }
@@ -27,8 +32,10 @@ impl CaffeineService {
         idle: Box<dyn IdleDetector>,
         jiggler: Box<dyn Jiggler>,
         repo: Box<dyn StatusRepository>,
+        battery: Box<dyn BatteryMonitor>,
         prevent_display: bool,
         jiggle_enabled: bool,
+        battery_threshold: u8,
         pid: u32,
     ) -> Self {
         Self {
@@ -36,12 +43,15 @@ impl CaffeineService {
             idle,
             jiggler,
             repo,
+            battery,
             guard: None,
             expiry: None,
             prevent_display,
             jiggle_enabled,
             jiggle_config: JiggleConfig::default(),
             last_jiggle: None,
+            battery_threshold,
+            tick_count: 0,
             pid,
         }
     }
@@ -87,11 +97,29 @@ impl CaffeineService {
         self.last_jiggle = None;
     }
 
-    /// Check expiry every tick; expire the session and clean up the status file.
+    /// Check expiry and battery threshold every tick.
     pub fn tick(&mut self) {
+        self.tick_count = self.tick_count.wrapping_add(1);
+
         if let Some(rem) = self.remaining()
             && rem.is_zero()
         {
+            self.deactivate();
+            self.repo.delete();
+            return;
+        }
+
+        // Check battery every 60 ticks (~30 s at 500 ms tick rate).
+        if self.is_active()
+            && self.battery_threshold > 0
+            && self.tick_count.is_multiple_of(60)
+            && let Some(pct) = self.battery.battery_percent()
+            && pct < self.battery_threshold
+        {
+            eprintln!(
+                "caffeine: deactivating — battery at {pct}% (threshold {}%)",
+                self.battery_threshold
+            );
             self.deactivate();
             self.repo.delete();
         }
