@@ -1,4 +1,4 @@
-use crate::domain::models::SessionInfo;
+use crate::domain::models::{CaffeineConfig, SessionInfo};
 
 /// Port: acquire and hold OS-level power management assertions.
 pub trait PowerManager: Send {
@@ -27,4 +27,24 @@ pub trait StatusRepository: Send {
     fn delete(&self);
     fn is_alive(&self, pid: u32) -> bool;
     fn now_secs(&self) -> u64;
+}
+
+/// Port: query battery state.
+pub trait BatteryMonitor: Send {
+    /// Returns the current battery percentage, or `None` on desktops without a battery.
+    fn battery_percent(&self) -> Option<u8>;
+    /// Returns `true` when the system is running on AC power.
+    fn is_on_ac(&self) -> bool;
+}
+
+/// Port: manage the launchd login item.
+pub trait LoginItemManager: Send + Sync {
+    fn is_enabled(&self) -> bool;
+    fn enable(&self) -> Result<(), String>;
+    fn disable(&self) -> Result<(), String>;
+}
+
+/// Port: load and persist user configuration.
+pub trait ConfigRepository: Send {
+    fn load(&self) -> CaffeineConfig;
 }
