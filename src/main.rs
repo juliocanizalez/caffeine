@@ -11,7 +11,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use caffeine::application::CaffeineService;
 use caffeine::domain::ports::StatusRepository;
 use caffeine::infrastructure::{
-    ipc::{FileStatusRepository, now_secs},
+    ipc::FileStatusRepository,
     jiggle::{CoreGraphicsIdleDetector, CoreGraphicsJiggler},
     power::IokitPowerManager,
 };
@@ -113,35 +113,17 @@ fn cmd_stop(repo: &FileStatusRepository) {
 
 // ── Menu bar icon ─────────────────────────────────────────────────────────────
 
-static ICON_ACTIVE_PNG: &[u8] = include_bytes!("../assets/icon_active.png");
-static ICON_INACTIVE_PNG: &[u8] = include_bytes!("../assets/icon_inactive.png");
+static ICON_ACTIVE_SVG: &[u8] = include_bytes!("../assets/icon_active.svg");
+static ICON_INACTIVE_SVG: &[u8] = include_bytes!("../assets/icon_inactive.svg");
 
 fn load_icon(bytes: &[u8]) -> Icon {
-    use png::ColorType;
-    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    let mut reader = decoder.read_info().expect("failed to read PNG info");
-    let mut buf = vec![
-        0u8;
-        reader
-            .output_buffer_size()
-            .expect("PNG has unknown buffer size")
-    ];
-    let info = reader.next_frame(&mut buf).expect("failed to decode PNG");
-    let raw = &buf[..info.buffer_size()];
-    let rgba: Vec<u8> = match info.color_type {
-        ColorType::Rgba => raw.to_vec(),
-        ColorType::Rgb => raw
-            .chunks(3)
-            .flat_map(|p| [p[0], p[1], p[2], 255u8])
-            .collect(),
-        ColorType::Grayscale => raw.iter().flat_map(|&v| [v, v, v, 255u8]).collect(),
-        ColorType::GrayscaleAlpha => raw
-            .chunks(2)
-            .flat_map(|p| [p[0], p[0], p[0], p[1]])
-            .collect(),
-        t => panic!("unsupported PNG colour type: {t:?}"),
-    };
-    Icon::from_rgba(rgba, info.width, info.height).expect("invalid icon RGBA")
+    use resvg::{tiny_skia, usvg};
+    let tree = usvg::Tree::from_data(bytes, &Default::default()).expect("invalid SVG");
+    let w = tree.size().width().round() as u32;
+    let h = tree.size().height().round() as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(w, h).expect("failed to allocate pixmap");
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+    Icon::from_rgba(pixmap.data().to_vec(), w, h).expect("invalid icon RGBA")
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -229,7 +211,6 @@ fn main() {
 
     // ── Wire service ──────────────────────────────────────────────────────────
 
-    let started_at = now_secs();
     let mut service = CaffeineService::new(
         Box::new(IokitPowerManager),
         Box::new(CoreGraphicsIdleDetector),
@@ -238,15 +219,14 @@ fn main() {
         !args.no_display,
         args.keep_status_active,
         std::process::id(),
-        started_at,
     );
     service.activate(initial_dur);
     service.sync_status();
 
     // ── Pre-load both icon variants ───────────────────────────────────────────
 
-    let icon_active = load_icon(ICON_ACTIVE_PNG);
-    let icon_inactive = load_icon(ICON_INACTIVE_PNG);
+    let icon_active = load_icon(ICON_ACTIVE_SVG);
+    let icon_inactive = load_icon(ICON_INACTIVE_SVG);
     let mut last_active: Option<bool> = None;
 
     // ── Event loop ────────────────────────────────────────────────────────────
