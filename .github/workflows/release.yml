@@ -55,3 +55,58 @@ jobs:
             ${{ matrix.archive }}
             ${{ matrix.archive }}.sha256
           generate_release_notes: true
+
+  update-homebrew-tap:
+    name: Update Homebrew tap
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch checksums from release
+        id: checksums
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BASE="https://github.com/juliocanizalez/caffeine/releases/download/${TAG}"
+          ARM_SHA=$(curl -fsSL "${BASE}/caffeine-aarch64-apple-darwin.tar.gz.sha256" | awk '{print $1}')
+          X86_SHA=$(curl -fsSL "${BASE}/caffeine-x86_64-apple-darwin.tar.gz.sha256" | awk '{print $1}')
+          VERSION="${TAG#v}"
+          echo "arm_sha=${ARM_SHA}" >> "$GITHUB_OUTPUT"
+          echo "x86_sha=${X86_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"  >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: juliocanizalez/homebrew-tap
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+          path: homebrew-tap
+
+      - name: Update formula
+        env:
+          VERSION: ${{ steps.checksums.outputs.version }}
+          ARM_SHA: ${{ steps.checksums.outputs.arm_sha }}
+          X86_SHA: ${{ steps.checksums.outputs.x86_sha }}
+        run: |
+          FORMULA="homebrew-tap/Formula/caffeine.rb"
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" "$FORMULA"
+          # Update arm sha256 (line after on_arm do)
+          awk -v arm="$ARM_SHA" -v x86="$X86_SHA" '
+            /on_arm do/   { print; found_arm=1; next }
+            found_arm && /sha256/ { sub(/"[a-f0-9]+"/, "\"" arm "\""); found_arm=0 }
+            /on_intel do/ { print; found_x86=1; next }
+            found_x86 && /sha256/ { sub(/"[a-f0-9]+"/, "\"" x86 "\""); found_x86=0 }
+            { print }
+          ' "$FORMULA" > "$FORMULA.tmp" && mv "$FORMULA.tmp" "$FORMULA"
+
+      - name: Commit and push
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ steps.checksums.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/caffeine.rb
+          git commit -m "build(formula): bump caffeine to v${VERSION}"
+          git push
