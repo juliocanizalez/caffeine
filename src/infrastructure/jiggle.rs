@@ -2,29 +2,17 @@ use std::ffi::c_void;
 
 use crate::domain::ports::{IdleDetector, Jiggler};
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct CGPoint {
-    x: f64,
-    y: f64,
-}
-
 const CG_EVENT_SOURCE_STATE_COMBINED_SESSION: i32 = 1;
 const CG_ANY_INPUT_EVENT_TYPE: u32 = 0xFFFF_FFFF;
-const CG_EVENT_MOUSE_MOVED: u32 = 5;
+const CG_EVENT_FLAGS_CHANGED: u32 = 12;
 const CG_HID_EVENT_TAP: i32 = 0;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
     fn CGEventCreate(source: *mut c_void) -> *mut c_void;
-    fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
-    fn CGEventCreateMouseEvent(
-        source: *mut c_void,
-        mouse_type: u32,
-        cursor_position: CGPoint,
-        mouse_button: i32,
-    ) -> *mut c_void;
+    fn CGEventSetType(event: *mut c_void, event_type: u32);
+    fn CGEventSetFlags(event: *mut c_void, flags: u64);
     fn CGEventPost(tap: i32, event: *mut c_void);
 }
 
@@ -49,28 +37,12 @@ fn jiggle() {
         if ev.is_null() {
             return;
         }
-        let pos = CGEventGetLocation(ev);
+        // Post a null flags-changed event to reset the HID idle timer.
+        // Unlike mouse-move events, this does not cause browsers to show media controls.
+        CGEventSetType(ev, CG_EVENT_FLAGS_CHANGED);
+        CGEventSetFlags(ev, 0);
+        CGEventPost(CG_HID_EVENT_TAP, ev);
         CFRelease(ev.cast_const());
-
-        let ev1 = CGEventCreateMouseEvent(
-            std::ptr::null_mut(),
-            CG_EVENT_MOUSE_MOVED,
-            CGPoint {
-                x: pos.x + 1.0,
-                y: pos.y,
-            },
-            0,
-        );
-        if !ev1.is_null() {
-            CGEventPost(CG_HID_EVENT_TAP, ev1);
-            CFRelease(ev1.cast_const());
-        }
-
-        let ev2 = CGEventCreateMouseEvent(std::ptr::null_mut(), CG_EVENT_MOUSE_MOVED, pos, 0);
-        if !ev2.is_null() {
-            CGEventPost(CG_HID_EVENT_TAP, ev2);
-            CFRelease(ev2.cast_const());
-        }
     }
 }
 

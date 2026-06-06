@@ -93,7 +93,7 @@ fn jiggle_no_rss_leak() {
         delta / 1024,
     );
 
-    // If CGEvent objects were not released, 500 calls × 3 events × ~200 B ≈ 300 KB.
+    // If CGEvent objects were not released, 500 calls × 1 event × ~200 B ≈ 100 KB.
     // Threshold is 2 MB to absorb ps-subprocess + malloc-arena noise while still
     // catching real leaks (missing CFRelease would accumulate MB quickly at scale).
     assert!(

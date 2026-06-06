@@ -121,7 +121,7 @@ check_for_updates = true
 
 IOKit sleep assertions prevent the system from sleeping, but Teams, Slack, and similar apps determine your "online" status by reading the HID idle timer independently of sleep prevention.
 
-When `-k` is active (or toggled on from the menu bar), caffeine periodically posts a tiny synthetic mouse event via `CGEventCreateMouseEvent` + `CGEventPost`, moving the cursor 1px right and immediately back. This resets the HID idle timer and keeps presence detection from marking you away.
+When `-k` is active (or toggled on from the menu bar), caffeine periodically posts a synthetic null `kCGEventFlagsChanged` event (zero modifier flags) via `CGEventCreate` + `CGEventPost`. This resets the HID idle timer and keeps presence detection from marking you away, without moving the cursor — so browser media controls are not triggered during video playback.
 
 **Smart pause:** caffeine first checks `CGEventSourceSecondsSinceLastEventType`. If you have been genuinely active within the last 5 minutes, the jiggle is skipped. Once real inactivity exceeds 5 minutes, a jiggle fires every 60 seconds until activity resumes or caffeine is stopped.
 
@@ -156,7 +156,7 @@ Measured on Apple M-series (arm64, debug build):
 | Operation | Avg latency |
 |---|---|
 | `idle_seconds()` via `CGEventSourceSecondsSinceLastEventType` | ~30 ns |
-| `jiggle()` via two `CGEventPost` calls + cursor restore | ~9 us |
+| `jiggle()` via one `CGEventPost` call (null flags-changed) | ~4 us |
 | RSS growth over 500 jiggle calls | < 500 KB |
 
 Run `cargo test -- --nocapture` to reproduce these numbers on your machine.
