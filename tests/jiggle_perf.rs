@@ -51,6 +51,35 @@ fn jiggle_is_fast() {
     );
 }
 
+// ── Idle-reset regression test ────────────────────────────────────────────────
+
+/// The jiggle event must register as user input in the combined-session event
+/// source state — that is the timer Electron apps (Slack) poll for auto-away.
+/// A no-op event (e.g. flags-changed with flags=0) silently fails this.
+///
+/// Ignored by default: it needs a real GUI session with permission to post
+/// events; CI runners may silently drop them. Run locally with
+/// `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn jiggle_resets_idle_timer() {
+    let detector = CoreGraphicsIdleDetector;
+    let jiggler = CoreGraphicsJiggler;
+
+    let before = detector.idle_seconds();
+    jiggler.jiggle();
+    // Event delivery through the WindowServer is asynchronous.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let after = detector.idle_seconds();
+
+    println!("idle before: {before:.3}s  after: {after:.3}s");
+    assert!(
+        after < before || after < 0.1,
+        "jiggle did not reset the combined-session idle timer \
+         (before: {before:.3}s, after: {after:.3}s)"
+    );
+}
+
 // ── Memory / leak test ────────────────────────────────────────────────────────
 
 /// Current process RSS in bytes via `ps`.

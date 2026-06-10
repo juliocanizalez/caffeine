@@ -4,15 +4,18 @@ use crate::domain::ports::{IdleDetector, Jiggler};
 
 const CG_EVENT_SOURCE_STATE_COMBINED_SESSION: i32 = 1;
 const CG_ANY_INPUT_EVENT_TYPE: u32 = 0xFFFF_FFFF;
-const CG_EVENT_FLAGS_CHANGED: u32 = 12;
 const CG_HID_EVENT_TAP: i32 = 0;
+/// kVK_F16 — unmapped on default Apple keyboards, so the event has no visible effect.
+const VK_F16: u16 = 0x6A;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
-    fn CGEventCreate(source: *mut c_void) -> *mut c_void;
-    fn CGEventSetType(event: *mut c_void, event_type: u32);
-    fn CGEventSetFlags(event: *mut c_void, flags: u64);
+    fn CGEventCreateKeyboardEvent(
+        source: *mut c_void,
+        virtual_key: u16,
+        key_down: bool,
+    ) -> *mut c_void;
     fn CGEventPost(tap: i32, event: *mut c_void);
 }
 
@@ -33,14 +36,16 @@ fn idle_seconds() -> f64 {
 
 fn jiggle() {
     unsafe {
-        let ev = CGEventCreate(std::ptr::null_mut());
+        // Post a lone F16 key-UP. The event must register as real user input —
+        // both our IdleDetector and Electron apps (Slack) read
+        // CGEventSourceSecondsSinceLastEventType, and no-op events (e.g.
+        // flags-changed with flags=0) are not counted by the WindowServer.
+        // Key-up alone cannot trigger app shortcuts (those fire on key-down)
+        // and, unlike mouse moves, does not surface browser media controls.
+        let ev = CGEventCreateKeyboardEvent(std::ptr::null_mut(), VK_F16, false);
         if ev.is_null() {
             return;
         }
-        // Post a null flags-changed event to reset the HID idle timer.
-        // Unlike mouse-move events, this does not cause browsers to show media controls.
-        CGEventSetType(ev, CG_EVENT_FLAGS_CHANGED);
-        CGEventSetFlags(ev, 0);
         CGEventPost(CG_HID_EVENT_TAP, ev);
         CFRelease(ev.cast_const());
     }

@@ -15,7 +15,8 @@ pub trait IdleDetector: Send {
     fn idle_seconds(&self) -> f64;
 }
 
-/// Port: simulate user presence by posting a mouse-move event pair.
+/// Port: simulate user presence by posting a synthetic input event that
+/// resets the system idle timers observed by other applications.
 pub trait Jiggler: Send {
     fn jiggle(&self);
 }
