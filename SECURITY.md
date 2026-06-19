@@ -13,7 +13,7 @@ Only the latest release receives security fixes. Please upgrade before reporting
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Report vulnerabilities privately by emailing **julio@nlc.com** with:
+Report vulnerabilities privately by emailing **juliocanizalez@outlook.com** with:
 
 - A description of the vulnerability
 - Steps to reproduce
