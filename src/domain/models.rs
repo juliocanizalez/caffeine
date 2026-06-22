@@ -39,10 +39,21 @@ pub struct CaffeineConfig {
     /// Check GitHub for a newer release on startup (default: true).
     #[serde(default = "default_true")]
     pub check_for_updates: bool,
+    /// Timed duration presets shown in the menu (e.g. ["15m", "30m", "1h"]).
+    /// Omit to use the built-in defaults.
+    #[serde(default = "default_menu_durations")]
+    pub menu_durations: Vec<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_menu_durations() -> Vec<String> {
+    ["15m", "30m", "1h", "2h", "4h"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 impl Default for CaffeineConfig {
@@ -52,6 +63,7 @@ impl Default for CaffeineConfig {
             keep_status_active: false,
             battery_threshold: 0,
             check_for_updates: true,
+            menu_durations: default_menu_durations(),
         }
     }
 }
