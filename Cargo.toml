@@ -1,6 +1,6 @@
 [package]
 name = "caffeine"
-version = "0.3.5"
+version = "0.4.0"
 edition = "2024"
 description = "Keep your Mac awake — CLI + live menu bar countdown"
 license = "MIT"
