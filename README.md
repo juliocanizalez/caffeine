@@ -86,7 +86,7 @@ Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 The menu bar icon is a minimal coffee cup (filled when active, hollow when inactive) that adapts to dark mode as a template image. Click it to access:
 
 - **Status line** showing time remaining (updates every 500ms)
-- **Duration presets**: 15m / 30m / 1h / 2h / 4h / Indefinite
+- **Duration presets**: configurable via `menu_durations` (defaults: 15m / 30m / 1h / 2h / 4h / Indefinite)
 - **Keep Status Active** toggle (jiggle mode)
 - **Launch at Login** toggle
 - **Update available** banner when a newer release is detected
@@ -113,6 +113,11 @@ battery_threshold = 20
 
 # Check GitHub for newer releases on startup (default: true)
 check_for_updates = true
+
+# Duration presets shown in the menu bar (default: ["15m", "30m", "1h", "2h", "4h"])
+# Accepts any duration string the CLI understands: plain numbers are minutes.
+# "Indefinite" is always appended as the last item regardless of this list.
+menu_durations = ["20m", "45m", "90m", "3h", "8h"]
 ```
 
 ---
