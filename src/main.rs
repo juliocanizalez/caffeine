@@ -170,11 +170,8 @@ fn load_icon(bytes: &[u8]) -> Icon {
 struct MenuItems {
     status: MenuItem,
     update: MenuItem,
-    m15m: MenuItem,
-    m30m: MenuItem,
-    m1h: MenuItem,
-    m2h: MenuItem,
-    m4h: MenuItem,
+    /// (label, seconds) — None seconds means indefinite.
+    presets: Vec<(MenuItem, Option<u64>)>,
     inf: MenuItem,
     keep_status: CheckMenuItem,
     launch_at_login: CheckMenuItem,
@@ -192,11 +189,9 @@ impl MenuItems {
         }
         menu.append(&self.status).unwrap();
         menu.append(&PredefinedMenuItem::separator()).unwrap();
-        menu.append(&self.m15m).unwrap();
-        menu.append(&self.m30m).unwrap();
-        menu.append(&self.m1h).unwrap();
-        menu.append(&self.m2h).unwrap();
-        menu.append(&self.m4h).unwrap();
+        for (item, _) in &self.presets {
+            menu.append(item).unwrap();
+        }
         menu.append(&self.inf).unwrap();
         menu.append(&PredefinedMenuItem::separator()).unwrap();
         menu.append(&self.keep_status).unwrap();
@@ -298,14 +293,29 @@ fn main() {
 
     // ── Build menu items ──────────────────────────────────────────────────────
 
+    let presets: Vec<(MenuItem, Option<u64>)> = cfg
+        .menu_durations
+        .iter()
+        .filter_map(|s| {
+            match caffeine::duration::parse(s) {
+                Ok(Some(d)) => {
+                    let secs = d.as_secs();
+                    let label = caffeine::duration::fmt(d);
+                    Some((MenuItem::new(label, true, None), Some(secs)))
+                }
+                Ok(None) => None, // "0" or similar — skip
+                Err(e) => {
+                    eprintln!("caffeine: ignoring invalid menu_duration {s:?} — {e}");
+                    None
+                }
+            }
+        })
+        .collect();
+
     let items = MenuItems {
         status: MenuItem::new("Active · indefinite", false, None),
         update: MenuItem::new("", true, None), // text set when update found
-        m15m: MenuItem::new("15 minutes", true, None),
-        m30m: MenuItem::new("30 minutes", true, None),
-        m1h: MenuItem::new("1 hour", true, None),
-        m2h: MenuItem::new("2 hours", true, None),
-        m4h: MenuItem::new("4 hours", true, None),
+        presets,
         inf: MenuItem::new("Indefinite", true, None),
         keep_status: CheckMenuItem::new("Keep Status Active", true, jiggle_enabled, None),
         launch_at_login: CheckMenuItem::new("Launch at Login", true, login_mgr.is_enabled(), None),
@@ -453,18 +463,10 @@ fn main() {
                 continue;
             }
 
-            let preset = if id == items.m15m.id() {
-                Some(Duration::from_secs(15 * 60))
-            } else if id == items.m30m.id() {
-                Some(Duration::from_secs(30 * 60))
-            } else if id == items.m1h.id() {
-                Some(Duration::from_secs(3600))
-            } else if id == items.m2h.id() {
-                Some(Duration::from_secs(2 * 3600))
-            } else if id == items.m4h.id() {
-                Some(Duration::from_secs(4 * 3600))
-            } else if id == items.inf.id() {
+            let preset = if id == items.inf.id() {
                 None
+            } else if let Some((_, secs)) = items.presets.iter().find(|(item, _)| id == item.id()) {
+                secs.map(Duration::from_secs)
             } else {
                 continue;
             };
