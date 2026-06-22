@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 <!-- next-release -->
 
+## [v0.4.0] - 2026-06-22
+
+- docs(changelog): add CHANGELOG and auto-update workflow
+- feat(config): add customizable menu duration presets
+
+
+---
+
+
 ## [Unreleased]
 
 ### Features
