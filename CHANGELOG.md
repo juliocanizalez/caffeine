@@ -20,42 +20,42 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [v0.3.5] - 2025-05-01
+## [v0.3.5] - 2026-06-10
 
 ### Bug Fixes
 - fix(jiggle): post F16 key-up so jiggle registers as user input
 
 ---
 
-## [v0.3.4] - 2025-04-28
+## [v0.3.4] - 2026-06-06
 
 ### Bug Fixes
 - fix(jiggle): use null flags-changed event to avoid browser media controls
 
 ---
 
-## [v0.3.3] - 2025-04-20
+## [v0.3.3] - 2026-06-02
 
 ### Chores
 - chore: track Cargo.lock for reproducible builds
 
 ---
 
-## [v0.3.2] - 2025-04-15
+## [v0.3.2] - 2026-06-01
 
 ### Chores
 - chore(formula): remove local Formula/ dir managed by homebrew-tap repo
 
 ---
 
-## [v0.3.1] - 2025-04-10
+## [v0.3.1] - 2026-06-01
 
 ### Bug Fixes
 - fix(config): resolve config path to ~/.config on macOS
 
 ---
 
-## [v0.3.0] - 2025-04-05
+## [v0.3.0] - 2026-06-01
 
 ### Features
 - feat(update): check GitHub releases for newer version on startup
@@ -66,7 +66,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [v0.2.2] - 2025-03-20
+## [v0.2.2] - 2026-06-01
 
 ### Features
 - feat(tray): replace PNG icons with SVG rendered via resvg
@@ -80,7 +80,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [v0.2.0] - 2025-03-10
+## [v0.2.0] - 2026-05-30
 
 ### Features
 - feat(tray): add template icon, active/inactive states, and TTY daemon
@@ -92,14 +92,14 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [v0.1.1] - 2025-03-01
+## [v0.1.1] - 2026-05-28
 
 ### Build
 - build(release): ship pre-built binaries for arm64 and x86_64
 
 ---
 
-## [v0.1.0] - 2025-02-25
+## [v0.1.0] - 2026-05-28
 
 ### Features
 - feat(caffeine): initial implementation
