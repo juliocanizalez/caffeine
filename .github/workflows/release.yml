@@ -56,6 +56,55 @@ jobs:
             ${{ matrix.archive }}.sha256
           generate_release_notes: true
 
+  update-changelog:
+    name: Update CHANGELOG
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Prepend release section to CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          PREV_TAG=$(git tag --sort=-version:refname | grep -A1 "^${TAG}$" | tail -1)
+          RANGE="${PREV_TAG}..${TAG}"
+          [ -z "$PREV_TAG" ] && RANGE="${TAG}"
+
+          {
+            echo "## [${TAG}] - ${DATE}"
+            echo ""
+            git log --pretty=format:"- %s" ${RANGE} \
+              | grep -v "^- build(release)" \
+              | grep -v "^- chore(release)"
+            echo ""
+            echo ""
+            echo "---"
+            echo ""
+          } > /tmp/new_section.md
+
+          # Insert after the <!-- next-release --> marker
+          awk '/<!-- next-release -->/{print; print ""; while((getline line < "/tmp/new_section.md") > 0) print line; next} {print}' CHANGELOG.md > CHANGELOG.tmp
+          mv CHANGELOG.tmp CHANGELOG.md
+
+      - name: Commit CHANGELOG
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --cached --quiet || git commit -m "docs(changelog): add ${TAG} release notes"
+          git push
+
   update-homebrew-tap:
     name: Update Homebrew tap
     needs: build
