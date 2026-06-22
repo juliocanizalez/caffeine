@@ -75,16 +75,17 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
-          PREV_TAG=$(git tag --sort=-version:refname | grep -A1 "^${TAG}$" | tail -1)
-          RANGE="${PREV_TAG}..${TAG}"
-          [ -z "$PREV_TAG" ] && RANGE="${TAG}"
+          # Find the tag that comes directly before TAG in semver order
+          PREV_TAG=$(git tag --sort=version:refname | grep -v "^${TAG}$" | awk -v t="${TAG}" '$0 < t' | tail -1)
+          RANGE="${PREV_TAG:+${PREV_TAG}..}${TAG}"
 
           {
             echo "## [${TAG}] - ${DATE}"
             echo ""
             git log --pretty=format:"- %s" ${RANGE} \
               | grep -v "^- build(release)" \
-              | grep -v "^- chore(release)"
+              | grep -v "^- chore(release)" \
+              | grep -v "^- docs(changelog)"
             echo ""
             echo ""
             echo "---"
@@ -103,7 +104,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
           git diff --cached --quiet || git commit -m "docs(changelog): add ${TAG} release notes"
-          git push
+          # Rebase to handle concurrent pushes from other release jobs
+          git pull --rebase origin main && git push
 
   update-homebrew-tap:
     name: Update Homebrew tap
